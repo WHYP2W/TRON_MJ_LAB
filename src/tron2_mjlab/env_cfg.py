@@ -1,4 +1,4 @@
-"""Flat-ground YG tasks with policy or independent upper-body control."""
+"""Flat-ground SFYG locomotion with independent upper-body control."""
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as env_mdp
@@ -15,16 +15,11 @@ from tron2_mjlab.control import UpperBodyActionCfg, upper_body_targets
 from tron2_mjlab.robot import (
     LEG_JOINTS,
     UPPER_JOINTS,
-    ArmMode,
     robot_cfg,
 )
 
 
-def make_env_cfg(
-    arm_mode: ArmMode = "policy", play: bool = False
-) -> ManagerBasedRlEnvCfg:
-    if arm_mode not in ("policy", "external"):
-        raise ValueError(f"Unknown arm mode: {arm_mode}")
+def make_env_cfg(*, play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg = make_velocity_env_cfg()
     cfg.scene.entities = {"robot": robot_cfg()}
     cfg.scene.num_envs = 1 if play else 64
@@ -52,9 +47,7 @@ def make_env_cfg(
             use_default_offset=True,
         ),
     }
-    cfg.actions["upper_body"] = UpperBodyActionCfg(
-        entity_name="robot", mode=arm_mode
-    )
+    cfg.actions["upper_body"] = UpperBodyActionCfg(entity_name="robot")
 
     for group in cfg.observations.values():
         group.terms.pop("height_scan", None)

@@ -2,14 +2,12 @@
 
 import os
 from pathlib import Path
-from typing import Literal
 
 from mjlab.actuator import BuiltinPositionActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mujoco._enums import mjtJoint
 from mujoco._specs import MjSpec
 
-ArmMode = Literal["policy", "external"]
 LEG_JOINTS = tuple(
     f"{joint}_{side}_Joint"
     for side in ("L", "R")

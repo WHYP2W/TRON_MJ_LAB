@@ -1,4 +1,4 @@
-"""Policy and independent upper-body control through the same actuators."""
+"""Independent upper-body control outside the locomotion action space."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import torch
 from mjlab.managers.action_manager import ActionTerm, ActionTermCfg
 
-from tron2_mjlab.robot import UPPER_JOINTS, ArmMode
+from tron2_mjlab.robot import UPPER_JOINTS
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
 @dataclass(kw_only=True)
 class UpperBodyActionCfg(ActionTermCfg):
-    mode: ArmMode = "policy"
     arm_scale: float = 0.5
     gripper_scale: float = 0.025
     arm_speed: float = 1.5
@@ -32,8 +31,6 @@ class UpperBodyAction(ActionTerm):
     cfg: UpperBodyActionCfg
 
     def __init__(self, cfg: UpperBodyActionCfg, env: ManagerBasedRlEnv):
-        if cfg.mode not in ("policy", "external"):
-            raise ValueError(f"Unknown arm control mode: {cfg.mode}")
         for parameter in (
             "arm_scale",
             "gripper_scale",
@@ -84,7 +81,7 @@ class UpperBodyAction(ActionTerm):
 
     @property
     def action_dim(self) -> int:
-        return 8 if self.cfg.mode == "policy" else 0
+        return 0
 
     @property
     def raw_action(self) -> torch.Tensor:
@@ -92,16 +89,13 @@ class UpperBodyAction(ActionTerm):
 
     def process_actions(self, actions: torch.Tensor) -> None:
         self._raw_actions[:] = actions
-        if self.cfg.mode == "policy":
-            target = self.home + actions.clamp(-1.0, 1.0) * self.scale
-        else:
-            self._phase.add_(
-                2.0 * torch.pi * self.cfg.motion_frequency * self._env.step_dt
-            )
-            automatic = self.home + 0.5 * self.scale * torch.sin(self._phase)
-            target = torch.where(
-                self._manual[:, None], self.desired_targets, automatic
-            )
+        self._phase.add_(
+            2.0 * torch.pi * self.cfg.motion_frequency * self._env.step_dt
+        )
+        automatic = self.home + 0.5 * self.scale * torch.sin(self._phase)
+        target = torch.where(
+            self._manual[:, None], self.desired_targets, automatic
+        )
         self.desired_targets.copy_(
             target.clamp(self.limits[..., 0], self.limits[..., 1])
         )
@@ -125,10 +119,6 @@ class UpperBodyAction(ActionTerm):
         Accepts shape (8,) or (selected_envs, 8), ordered as UPPER_JOINTS.
         Manual targets persist until reset or release_targets().
         """
-        if self.cfg.mode != "external":
-            raise RuntimeError(
-                "Independent targets require arm mode 'external'"
-            )
         selection = slice(None) if env_ids is None else env_ids
         target = torch.as_tensor(
             targets, dtype=self.home.dtype, device=self.device

@@ -30,9 +30,6 @@ def positive_int(value: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--arm-mode", choices=("policy", "external"), default="policy"
-    )
     parser.add_argument("--num-envs", type=positive_int, default=2)
     parser.add_argument("--steps", type=positive_int, default=128)
     parser.add_argument("--checkpoint", type=Path)
@@ -40,8 +37,6 @@ def main() -> None:
     parser.add_argument("--image", type=Path)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
-    if args.arm_targets is not None and args.arm_mode != "external":
-        parser.error("--arm-targets requires --arm-mode external")
     if args.checkpoint is not None and not args.checkpoint.is_file():
         parser.error(f"Checkpoint does not exist: {args.checkpoint}")
     if not torch.cuda.is_available():
@@ -50,7 +45,7 @@ def main() -> None:
         )
     configure_torch_backends()
     wp.init()
-    cfg = make_env_cfg(args.arm_mode, play=True)
+    cfg = make_env_cfg(play=True)
     cfg.scene.num_envs = args.num_envs
     cfg.seed = 42
     cfg.viewer.width = 960
@@ -59,7 +54,7 @@ def main() -> None:
         cfg, device="cuda:0", render_mode="rgb_array" if args.image else None
     )
     try:
-        agent_cfg = runner_cfg(args.arm_mode)
+        agent_cfg = runner_cfg()
         wrapper = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
         observations = wrapper.get_observations()
         policy = None
@@ -96,10 +91,6 @@ def main() -> None:
                         env.action_manager.total_action_dim,
                         device=env.device,
                     )
-                    if args.arm_mode == "policy":
-                        actions[:, -8:] = 0.4 * np.sin(
-                            step_index * env.step_dt + 0.5
-                        )
                 observations, rewards, dones, _ = wrapper.step(actions)
                 for name, values in observations.items():
                     if not isinstance(values, torch.Tensor):
@@ -145,7 +136,7 @@ def main() -> None:
             "cuda": torch.version.cuda,
             "gpu": torch.cuda.get_device_name(),
             "robot": "SFYG_TRON2A",
-            "arm_mode": args.arm_mode,
+            "arm_mode": "external",
             "num_envs": args.num_envs,
             "steps": args.steps,
             "action_dim": env.action_manager.total_action_dim,
@@ -157,8 +148,7 @@ def main() -> None:
             "image": str(args.image) if args.image else None,
         }
         output = (
-            args.report
-            or PROJECT_ROOT / "artifacts" / f"SFYG_{args.arm_mode}.json"
+            args.report or PROJECT_ROOT / "artifacts" / "SFYG_external.json"
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
