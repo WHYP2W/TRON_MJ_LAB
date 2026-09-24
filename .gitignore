@@ -1,0 +1,14 @@
+.venv/
+.conda/
+.vscode/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+assets/
+logs/
+artifacts/
+dist/
+build/
+*.egg-info/
+MUJOCO_LOG.TXT
