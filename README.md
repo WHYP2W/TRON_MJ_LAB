@@ -21,7 +21,6 @@
 ```powershell
 uv sync --locked
 .\scripts\setup_assets.ps1
-uv run tron2-check
 ```
 
 `uv` 会在项目内创建 `.venv`。在 VS Code 中打开项目后，请选择
@@ -68,26 +67,21 @@ uv run train Mjlab-Velocity-Flat-TRON2-SFYG-External --agent.resume True --agent
 
 续训时必须使用同一任务的检查点，并保持观测和动作结构一致。Isaac Lab 参考项目的检查点与本项目任务不兼容。
 
-## 回放与检查
+## 策略回放
 
 选择本地训练生成的检查点：
 
 ```powershell
 $Checkpoint = '.\logs\rsl_rl\tron2_sfyg_external\<run>\model_100.pt'
 uv run play Mjlab-Velocity-Flat-TRON2-SFYG-External --checkpoint-file $Checkpoint --viewer native --num-envs 1
-uv run tron2-check --checkpoint $Checkpoint --steps 128 --image artifacts\sfyg_external.png
 ```
 
-查看未训练的模型，或验证独立控制器驱动机械臂运动：
+查看未训练的模型和独立控制器驱动的机械臂运动：
 
 ```powershell
 uv run play Mjlab-Velocity-Flat-TRON2-SFYG-External --agent zero --viewer native --num-envs 1
-uv run tron2-check --steps 128 --image artifacts\sfyg_external.png
-uv run tron2-check --arm-targets 0.3 0.5 -0.9 0.1 0.2 0.0 0.03 -0.03
 ```
 
-`tron2-check` 执行有限步数的 CUDA 仿真，检查观测和奖励数值是否有效、上肢关节是否实际运动，
-并将 JSON 报告写入 `artifacts/`。`--image` 保存首次步进后的画面，不代表已经训练出收敛的步态。
 未训练策略或零动作策略可能使机器人摔倒，随后环境会自动重置。
 
 ## 独立控制器接口
@@ -115,25 +109,9 @@ upper_body.release_targets()
 目标持续有效，直到被替换、主动释放，或对应环境重置。实时外部控制器应在每次步进前更新命令，环境重置后也不例外。
 接口会拒绝包含非有限数值或形状错误的目标。腿部策略步进不会覆盖已经设置的外部上肢目标。
 
-## 质量检查
+## 模型说明
 
-```powershell
-uv run ruff format --check src tests
-uv run ruff check src tests
-uv run pyright
-uv run pytest -q -m "not gpu"
-uv run pytest -q -m gpu
-uv build --no-sources
-```
-
-Windows CI 工作流在 Python 3.11/3.12 上执行格式检查、静态检查、标准级 Pyright 类型检查、非 GPU 测试和打包。
-GitHub Actions 和 uv 均固定版本，运行与开发依赖通过锁文件固定。CI 使用只读权限，不在私有 GPU 执行器上运行不可信代码。
-GPU 测试在本地原生 CUDA 主机执行，不在没有 GPU 的托管 CI 执行器上运行。
-
-测试覆盖模型编译、机械臂与夹爪关节可动性、执行器覆盖、控制参数有限性、输入校验、上肢与策略动作空间隔离、
-目标变化率限制、部分环境重置、任务配置隔离，以及独立控臂任务的 GPU 仿真。
-本地已验证 SFYG 的 PPO 更新、检查点保存与回放，以及原生图像渲染。临时冒烟测试权重和参考代码不随项目交付。
-短时验证生成的检查点**不是训练成熟的行走策略**。奖励调优、长期训练收敛、复杂地形、操作任务和仿真到实机验证不在本基线范围内。
+本项目不提供训练成熟的行走策略。奖励调优、长期训练收敛、复杂地形、操作任务和仿真到实机验证不在本基线范围内。
 
 模型适配器仅修改内存中的模型描述：移除模型自带的独立地面和电机，添加 mjlab 执行器与定位点，
 并按 MuJoCo Warp MULTICCD 的要求将碰撞裕量设为零。场景时间步和接触容量由 mjlab 配置管理，不使用独立 XML 中的对应选项。
