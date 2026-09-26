@@ -403,6 +403,28 @@ def motion_finished(env: ManagerBasedRlEnv) -> torch.Tensor:
     return command.time_steps >= command.motion.time_step_total - 1
 
 
+@dataclass(kw_only=True)
+class PhpMotionCommandCfg(tracking_mdp.MotionCommandCfg):
+    start_sampling_probability: float = 0.0
+
+    def build(self, env: ManagerBasedRlEnv) -> PhpMotionCommand:
+        if not 0.0 <= self.start_sampling_probability <= 1.0:
+            raise ValueError("Start sampling probability must lie in [0, 1]")
+        return PhpMotionCommand(self, env)
+
+
+class PhpMotionCommand(tracking_mdp.MotionCommand):
+    def __init__(self, cfg: PhpMotionCommandCfg, env: ManagerBasedRlEnv):
+        super().__init__(cfg, env)
+        self.metrics["start_sample"] = torch.zeros(self.num_envs, device=self.device)
+
+    def _adaptive_sampling(self, env_ids: torch.Tensor) -> None:
+        super()._adaptive_sampling(env_ids)
+        start = torch.rand(len(env_ids), device=self.device) < self.cfg.start_sampling_probability
+        self.time_steps[env_ids[start]] = 0
+        self.metrics["start_sample"][env_ids] = start.float()
+
+
 def make_expert_env_cfg(*, play: bool = False, motion_file: str | None = None) -> ManagerBasedRlEnvCfg:
     """PHP-style privileged motion-tracking expert with independent upper body."""
     cfg = make_tracking_env_cfg()
@@ -439,6 +461,10 @@ def make_expert_env_cfg(*, play: bool = False, motion_file: str | None = None) -
         "upper_body": UpperBodyActionCfg(entity_name="robot", automatic_motion=False),
     }
     motion = cfg.commands["motion"]
+    cfg.commands["motion"] = motion = PhpMotionCommandCfg(**{
+        parameter.name: getattr(motion, parameter.name)
+        for parameter in fields(motion) if parameter.init
+    })
     motion.motion_file = motion_file
     motion.anchor_body_name = "base_Link"
     motion.body_names = ("base_Link",) + tuple(name.replace("_Joint", "_Link") for name in LEG_JOINTS)

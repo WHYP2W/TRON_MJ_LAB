@@ -31,6 +31,20 @@ def write_fixture(path: Path, translation: float = 0.0) -> None:
 
 
 class MotionDataTests(unittest.TestCase):
+    def test_time_scaling_preserves_poses_and_scales_velocities(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / "source.npz", root / "half_speed.npz"
+            write_fixture(source)
+            report = export_tracking_motion(source, output, playback_speed=0.5)
+            self.assertEqual(report["frames"], 301)
+            with np.load(output, allow_pickle=False) as motion, np.load(source, allow_pickle=False) as original:
+                np.testing.assert_allclose(motion["qpos"][::2], original["qpos"], atol=1e-10)
+                np.testing.assert_allclose(motion["qvel"][:, 0], 0.5, atol=1e-10)
+                np.testing.assert_allclose(motion["terrain_positions"], original["terrain_positions"])
+                np.testing.assert_allclose(motion["velocity_commands"][::2], original["velocity_commands"] * 0.5)
+                self.assertEqual(float(motion["playback_speed"]), 0.5)
+
     def test_commands_follow_resampling(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

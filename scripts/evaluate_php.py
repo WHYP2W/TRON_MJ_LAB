@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
+import numpy as np
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
@@ -25,6 +26,15 @@ def evaluate(args: argparse.Namespace) -> dict:
     cfg = load_env_cfg(task_id, play=True)
     cfg.seed = args.seed
     cfg.scene.num_envs = args.num_envs
+    cfg.commands["motion"].sampling_mode = args.sampling
+    if args.motion_file is not None:
+        cfg.commands["motion"].motion_file = str(args.motion_file)
+        cfg.scene.terrain.terrain_generator.sub_terrains["reference"].motion_file = str(args.motion_file)
+    reference_path = Path(cfg.commands["motion"].motion_file)
+    with reference_path.open("rb") as stream:
+        reference_checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+    with np.load(reference_path, allow_pickle=False) as reference:
+        playback_speed = float(reference.get("playback_speed", 1.0))
     cfg.commands["motion"].pose_range = {
         axis: (-args.perturbation, args.perturbation) for axis in ("x", "y", "yaw")
     }
@@ -38,6 +48,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         policy = runner.get_inference_policy(device=args.device)
         observations, _ = env.reset()
         command = environment.command_manager.get_term("motion")
+        initial_frames = command.time_steps.clone()
         active = torch.ones(args.num_envs, dtype=torch.bool, device=args.device)
         completed = torch.zeros_like(active)
         steps = torch.zeros(args.num_envs, dtype=torch.long, device=args.device)
@@ -71,8 +82,13 @@ def evaluate(args: argparse.Namespace) -> dict:
             "task": task_id,
             "checkpoint": str(args.checkpoint),
             "checkpoint_sha256": checksum,
+            "reference_motion": str(reference_path),
+            "reference_sha256": reference_checksum,
+            "reference_playback_speed": playback_speed,
             "seed": args.seed,
             "initial_xy_yaw_perturbation": args.perturbation,
+            "reference_sampling": args.sampling,
+            "initial_reference_frames": initial_frames.cpu().tolist(),
             "reference_frames": command.motion.time_step_total,
             "trials": args.num_envs,
             "completed": int(completed.sum().item()),
@@ -95,9 +111,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--policy", choices=("expert", "student"), default="expert")
+    parser.add_argument("--motion-file", type=Path)
     parser.add_argument("--num-envs", type=int, default=8)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--sampling", choices=("start", "uniform"), default="start")
     parser.add_argument("--perturbation", type=float, default=0.01)
     parser.add_argument("--output", type=Path)
     print(json.dumps(evaluate(parser.parse_args()), indent=2))

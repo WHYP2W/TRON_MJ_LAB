@@ -16,13 +16,17 @@ from tron2_mjlab.motion_matching import MotionClip, MotionDatabase, compose_moti
 from tron2_mjlab.robot import LEG_JOINTS, UPPER_JOINTS, get_spec
 
 
-def export_tracking_motion(source: Path, output: Path, fps: float = 50.0) -> dict:
+def export_tracking_motion(
+    source: Path, output: Path, fps: float = 50.0, playback_speed: float = 1.0
+) -> dict:
     if output.suffix != ".npz":
         raise ValueError("Tracking output must have an .npz suffix")
     if output.exists():
         raise FileExistsError(f"Output already exists: {output}")
     if not np.isfinite(fps) or fps <= 0:
         raise ValueError("Output frame rate must be finite and positive")
+    if not np.isfinite(playback_speed) or playback_speed <= 0:
+        raise ValueError("Playback speed must be finite and positive")
     with np.load(source, allow_pickle=False) as archive:
         arrays = {name: archive[name] for name in archive.files}
     if str(arrays.get("qpos_order", "")) != "xyz_wxyz_joints":
@@ -38,7 +42,7 @@ def export_tracking_motion(source: Path, output: Path, fps: float = 50.0) -> dic
     quaternion_norm = np.linalg.norm(qpos[:, 3:7], axis=-1)
     if np.any(quaternion_norm < 1e-8):
         raise ValueError("Source has an invalid root quaternion")
-    source_times = np.arange(len(qpos)) / source_fps
+    source_times = np.arange(len(qpos)) / (source_fps * playback_speed)
     target_times = np.arange(0.0, source_times[-1] + 1e-10, 1 / fps)
     if len(target_times) < 2:
         raise ValueError("Output motion must have at least two frames")
@@ -90,6 +94,9 @@ def export_tracking_motion(source: Path, output: Path, fps: float = 50.0) -> dic
             if len(arrays[name]) != len(qpos):
                 raise ValueError(f"{name} must have one entry per source frame")
             arrays[name] = arrays[name][indices]
+            if name == "velocity_commands":
+                arrays[name] = arrays[name] * playback_speed
+    arrays["playback_speed"] = np.asarray(float(arrays.get("playback_speed", 1.0)) * playback_speed)
     arrays.update(
         fps=np.asarray(fps), qpos=target_qpos, qvel=qvel,
         joint_pos=target_qpos[:, 7:], joint_vel=qvel[:, 6:],
@@ -102,7 +109,7 @@ def export_tracking_motion(source: Path, output: Path, fps: float = 50.0) -> dic
         raise ValueError("Converted motion contains non-finite data")
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output, **arrays)
-    return {"frames": frames, "fps": fps, "joints": len(joint_names), "bodies": len(body_names), "output": str(output)}
+    return {"frames": frames, "fps": fps, "playback_speed": float(arrays["playback_speed"]), "joints": len(joint_names), "bodies": len(body_names), "output": str(output)}
 
 
 def load_matching_clip(
@@ -213,12 +220,13 @@ def main() -> None:
     convert.add_argument("--source", type=Path, required=True)
     convert.add_argument("--output", type=Path, required=True)
     convert.add_argument("--fps", type=float, default=50.0)
+    convert.add_argument("--playback-speed", type=float, default=1.0)
     compose = commands.add_parser("compose")
     compose.add_argument("--manifest", type=Path, required=True)
     compose.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.operation == "convert":
-        result = export_tracking_motion(args.source, args.output, args.fps)
+        result = export_tracking_motion(args.source, args.output, args.fps, args.playback_speed)
     else:
         result = compose_tracking_motion(args.manifest, args.output)
     print(json.dumps(result, indent=2))

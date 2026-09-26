@@ -4,6 +4,7 @@ import unittest
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 from tensordict import TensorDict
@@ -13,12 +14,31 @@ from rsl_rl.models import CNNModel, MLPModel
 from rsl_rl.storage import RolloutStorage
 
 from tron2_mjlab.distillation import PhpPPO, distillation_schedule, hybrid_loss, masked_dagger_loss
-from tron2_mjlab.env_cfg import DepthObservation, make_env_cfg, make_expert_env_cfg, make_student_env_cfg
+from tron2_mjlab.env_cfg import DepthObservation, PhpMotionCommand, make_env_cfg, make_expert_env_cfg, make_student_env_cfg
+from mjlab.tasks.tracking.mdp import MotionCommand
 from tron2_mjlab.robot import LEG_JOINTS
 from tron2_mjlab.tasks import STUDENT_TASK_ID
 
 
 class DistillationTests(unittest.TestCase):
+    def test_optional_start_sampling_does_not_change_default(self):
+        self.assertEqual(make_expert_env_cfg().commands["motion"].start_sampling_probability, 0.0)
+        self.assertEqual(make_student_env_cfg().commands["motion"].sampling_mode, "uniform")
+        command = object.__new__(PhpMotionCommand)
+        command.cfg = SimpleNamespace(start_sampling_probability=1.0)
+        command._env = SimpleNamespace(device="cpu")
+        command.time_steps = torch.full((4,), 50, dtype=torch.long)
+        command.metrics = {"start_sample": torch.zeros(4)}
+        selected = torch.tensor([1, 3])
+        with patch.object(MotionCommand, "_adaptive_sampling", return_value=None):
+            command._adaptive_sampling(selected)
+        torch.testing.assert_close(command.time_steps, torch.tensor([50, 0, 50, 0]))
+        command.cfg.start_sampling_probability = 0.0
+        command.time_steps.fill_(50)
+        with patch.object(MotionCommand, "_adaptive_sampling", return_value=None):
+            command._adaptive_sampling(selected)
+        torch.testing.assert_close(command.time_steps, torch.full((4,), 50, dtype=torch.long))
+
     def test_php_action_term_matches_exporter_without_changing_layout(self):
         self.assertEqual(tuple(make_env_cfg().actions), ("legs", "upper_body"))
         for factory in (make_expert_env_cfg, make_student_env_cfg):
