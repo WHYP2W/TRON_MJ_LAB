@@ -433,7 +433,7 @@ def make_expert_env_cfg(*, play: bool = False, motion_file: str | None = None) -
         ),
     )
     cfg.actions = {
-        "legs": JointPositionActionCfg(
+        "joint_pos": JointPositionActionCfg(
             entity_name="robot", actuator_names=LEG_JOINTS, scale=1.0, use_default_offset=True,
         ),
         "upper_body": UpperBodyActionCfg(entity_name="robot", automatic_motion=False),

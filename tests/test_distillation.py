@@ -13,11 +13,20 @@ from rsl_rl.models import CNNModel, MLPModel
 from rsl_rl.storage import RolloutStorage
 
 from tron2_mjlab.distillation import PhpPPO, distillation_schedule, hybrid_loss, masked_dagger_loss
-from tron2_mjlab.env_cfg import DepthObservation, make_student_env_cfg
+from tron2_mjlab.env_cfg import DepthObservation, make_env_cfg, make_expert_env_cfg, make_student_env_cfg
+from tron2_mjlab.robot import LEG_JOINTS
 from tron2_mjlab.tasks import STUDENT_TASK_ID
 
 
 class DistillationTests(unittest.TestCase):
+    def test_php_action_term_matches_exporter_without_changing_layout(self):
+        self.assertEqual(tuple(make_env_cfg().actions), ("legs", "upper_body"))
+        for factory in (make_expert_env_cfg, make_student_env_cfg):
+            cfg = factory()
+            self.assertEqual(tuple(cfg.actions), ("joint_pos", "upper_body"))
+            self.assertEqual(cfg.actions["joint_pos"].actuator_names, LEG_JOINTS)
+            self.assertEqual(cfg.actions["joint_pos"].scale, 1.0)
+
     def test_curriculum_keeps_dagger_and_relaxes_termination(self):
         first = distillation_schedule(0, 20000)
         middle = distillation_schedule(10000, 20000)
