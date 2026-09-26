@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "tron2-mjlab"
 version = "0.1.0"
-description = "TRON2A SFYG locomotion and arm control with mjlab on native Windows"
+description = "TRON2A SFYG locomotion and arm control with mjlab on Ubuntu 22.04"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -17,7 +17,7 @@ dependencies = [
 tron2_yg = "tron2_mjlab"
 
 [tool.uv]
-environments = ["sys_platform == 'win32'"]
+environments = ["sys_platform == 'linux'"]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

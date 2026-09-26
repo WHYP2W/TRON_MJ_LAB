@@ -7,9 +7,10 @@ from mjlab.rl import (
 )
 from mjlab.tasks.registry import list_tasks, register_mjlab_task
 
-from tron2_mjlab.env_cfg import make_env_cfg
+from tron2_mjlab.env_cfg import make_env_cfg, make_obstacle_env_cfg
 
 TASK_ID = "Mjlab-Velocity-Flat-TRON2-SFYG-External"
+OBSTACLE_TASK_ID = "Mjlab-Velocity-Obstacles-TRON2-SFYG-External"
 
 
 def runner_cfg() -> RslRlOnPolicyRunnerCfg:
@@ -45,4 +46,13 @@ def register_tasks() -> None:
             env_cfg=make_env_cfg(),
             play_env_cfg=make_env_cfg(play=True),
             rl_cfg=runner_cfg(),
+        )
+    if OBSTACLE_TASK_ID not in list_tasks():
+        obstacle_runner_cfg = runner_cfg()
+        obstacle_runner_cfg.experiment_name = "tron2_sfyg_obstacles"
+        register_mjlab_task(
+            task_id=OBSTACLE_TASK_ID,
+            env_cfg=make_obstacle_env_cfg(),
+            play_env_cfg=make_obstacle_env_cfg(play=True),
+            rl_cfg=obstacle_runner_cfg,
         )

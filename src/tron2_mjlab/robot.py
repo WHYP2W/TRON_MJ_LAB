@@ -37,7 +37,7 @@ def model_path() -> Path:
     if not path.is_file():
         raise FileNotFoundError(
             f"Official YG model not found: {path}. "
-            "Run scripts/setup_assets.ps1 first, "
+            "Run bash scripts/setup_assets.sh first, "
             "or set TRON2_ASSET_ROOT to the robot-description checkout."
         )
     return path

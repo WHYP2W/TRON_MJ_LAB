@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 @dataclass(kw_only=True)
 class UpperBodyActionCfg(ActionTermCfg):
+    automatic_motion: bool = True
     arm_scale: float = 0.5
     gripper_scale: float = 0.025
     arm_speed: float = 1.5
@@ -92,7 +93,11 @@ class UpperBodyAction(ActionTerm):
         self._phase.add_(
             2.0 * torch.pi * self.cfg.motion_frequency * self._env.step_dt
         )
-        automatic = self.home + 0.5 * self.scale * torch.sin(self._phase)
+        automatic = (
+            self.home + 0.5 * self.scale * torch.sin(self._phase)
+            if self.cfg.automatic_motion
+            else self.home
+        )
         target = torch.where(
             self._manual[:, None], self.desired_targets, automatic
         )
@@ -141,7 +146,7 @@ class UpperBodyAction(ActionTerm):
     def release_targets(
         self, env_ids: torch.Tensor | slice | None = None
     ) -> None:
-        """Resume automatic motion for the selected environments."""
+        """Return the selected environments to their configured default behavior."""
         selection = slice(None) if env_ids is None else env_ids
         self._manual[selection] = False
 
