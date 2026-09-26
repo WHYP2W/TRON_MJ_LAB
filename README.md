@@ -8,12 +8,13 @@
 **面向 SFYG_TRON2A 的 Ubuntu 22.04 强化学习训练基线。腿部策略负责行走，独立控制器负责机械臂与夹爪。**
 
 基于 [mjlab](https://pypi.org/project/mjlab/)、MuJoCo Warp 与 PPO，
-提供从官方模型准备、并行训练到策略回放的完整入口，使用 Bash 和 uv 管理环境，不依赖参考训练仓库。
+提供从官方模型准备、并行训练到策略回放的入口，使用 Bash 和 uv 管理环境。
+PHP 研究流程另外复用固定版本的官方 OmniRetarget 实现，工具环境与训练环境分开。
 
-> **项目定位**：用于平地运动控制、静态障碍环境与独立上肢控制的研究和开发。
+> **项目定位**：研究 PHP 方法在 TRON2 上的迁移，保留平地与静态障碍基线用于对照。
 > 仓库不附带训练成熟的策略，不包含抓取、末端跟踪或实机部署能力，也不承诺给定训练预算内收敛。
 
-[快速开始](#快速开始) · [静态障碍](#静态障碍环境第一阶段) · [训练与回放](#训练与回放) · [控制设计](#任务与控制设计) ·
+[快速开始](#快速开始) · [PHP 研究流程](#php-研究流程) · [静态障碍](#静态障碍环境第一阶段) · [训练与回放](#训练与回放) · [控制设计](#任务与控制设计) ·
 [上肢接口](#上肢控制接口) · [模型与资产](#模型与资产) · [常见问题](#常见问题) · [参与贡献](#开发与贡献)
 
 ## 项目特点
@@ -21,6 +22,7 @@
 - **清晰的控制分工**：策略仅控制 10 个腿部关节；6 个机械臂关节和 2 个夹爪关节接受独立目标。
 - **独立上肢控制**：平地任务默认生成平滑正弦目标，障碍任务默认保持姿态；两者都支持外部控制器接管。
 - **静态障碍第一阶段**：提供平台、连续上下楼梯与沟隙跑道，以及可重复执行的几何和无头仿真检查；尚未实现视觉自主越障。
+- **PHP 核心实现**：真实人体动作重定向、27 维 Motion Matching 与惯性化拼接、动作跟踪专家、深度学生及联合 DAgger/PPO 优化器；训练收敛与多技能效果仍待验证。
 - **固定依赖与模型版本**：通过 uv 锁文件和官方模型的固定提交管理环境与资产，减少版本漂移。
 - **独立任务扩展**：通过 Python 包入口点注册任务，不修改上游 mjlab 内置任务；默认本地记录 TensorBoard 日志，不上传模型。
 
@@ -133,6 +135,109 @@ MUJOCO_GL=glfw CUDA_VISIBLE_DEVICES=0 uv run play Mjlab-Velocity-Flat-TRON2-SFYG
 > 零动作不等于已学会站立或行走。机器人可能摔倒并触发自动重置，这不代表安装失败。
 > 此步骤用于检查运行链路，不用于评估策略质量。
 
+## PHP 研究流程
+
+参考 [Perceptive Humanoid Parkour, arXiv:2602.15827v1](https://arxiv.org/abs/2602.15827v1)。
+目标是复现其方法并适配 TRON2，不是用零动作地形预览替代论文结果。TRON2 只由策略控制 10 个腿部关节，
+与论文 G1 的 29 自由度全身策略不同；上肢由独立控制器保持或接收外部目标。
+
+### 当前状态与限制
+
+- 已取得并校验 OmniRetarget 的真实地形交互动作，使用官方 SQP/Clarabel 实现完成一个 TRON2 动作的重定向，保留配套障碍及来源哈希。
+- 已实现 27 维匹配特征、未来速度指令查询、技能进入窗口、执行期间锁定、返回行走和惯性化过渡。拼接支持同步变换配套障碍，并导出 mjlab 跟踪格式。
+- 专家采用 BeyondMimic 跟踪框架、全局参考误差、0.7m 高度扫描与失败片段采样。深度学生采用三层 CNN、32 维视觉特征及五层 MLP，学生输入中没有参考姿态、全局位置或高度扫描。
+- 联合优化器实现 DAgger/PPO 权重课程、专家有效域掩码、终止阈值放宽、延迟开启 KL 学习率调节、教师冻结及课程检查点恢复。
+- 当前环境仍是单个真实参考动作的试验入口；完整行走动作库、多个专家覆盖全部目标技能、充分的接近距离采样、地形随机化和持续自主技能衔接尚未验证。
+- 当前学生试验入口使用固定前向速度指令；最终应使用与合成轨迹配套的速度指令分布。多教师优化器入口要求明确的 `teacher_id`，默认单参考环境不提供多技能分配。
+- 深度图为 58×87，按 30Hz 保持采样，额外加入 3–4 个控制步的观测延迟。训练时加入深度偏移与高斯噪声。相机使用仿真名义安装点，尚无实机外参标定或安装扰动验证。
+- 已通过 CPU 回归、真实轨迹转换、GPU 专家/深度观测及 CNN 前向检查；联合优化器仅通过合成批次更新检查，**不能据此声称已获得有效专家、深度策略或 50cm 越障能力**。
+
+### 数据与重定向
+
+准备模型与项目环境后，下载固定版本的动作及场景。默认访问 Hugging Face；网络受限时可显式使用镜像，文件仍必须通过校验：
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com bash scripts/setup_motions.sh climb_16
+bash scripts/setup_retargeting.sh
+```
+
+重定向工具位于忽略目录 `downloads/retarget-env/`，复用项目中已锁定的 MuJoCo/PyTorch，独立安装优化依赖。
+安装受网络限制时可通过 `UV_DEFAULT_INDEX` 指定受信任的 PyPI 镜像，不要替换项目锁文件。
+
+```bash
+downloads/retarget-env/bin/python scripts/retarget_motion.py \
+  --member robot-terrain/climb_16_z_scale_0.8.npz \
+  --output downloads/retargeted/tron2_climb16_paired.npz
+.venv/bin/python -m tron2_mjlab.motion_data convert \
+  --source downloads/retargeted/tron2_climb16_paired.npz \
+  --output downloads/retargeted/tron2_climb16_fps50.npz
+```
+
+已有输出不会被覆盖。用于快速检查时可给重定向脚本增加 `--max-frames 8` 并使用另一个输出路径，
+但截短样本不能作为完整技能训练参考。数据卡声明 MIT 许可；LAFAN1 有独立限制，作者未在该数据集中发布其重定向结果。
+官方重定向代码为 Apache-2.0，来源与固定提交见 [scripts/setup_retargeting.sh](scripts/setup_retargeting.sh)。
+
+### 动作拼接
+
+使用 [src/tron2_mjlab/motion_data.py](src/tron2_mjlab/motion_data.py) 的 `compose` 命令读取 JSON 清单。
+`clips` 中的 `path` 相对清单所在目录；可用 `start_frame`/`stop_frame` 选择经过检查的行走区段，
+技能的 `skill_start`/`skill_end`/`entry_frames` 相对所选区段。`commands` 为逐帧二维世界速度指令，
+`skills` 指定离线合成的技能进入时刻，而不是学生部署时的技能标签。
+
+```json
+{
+  "initial_clip": "walk",
+  "clips": [
+    {"name": "walk", "path": "walk_fps50.npz"},
+    {"name": "step", "path": "step_fps50.npz", "skill_start": 60, "skill_end": 200, "entry_frames": 30}
+  ],
+  "commands": [[1.0, 0.0], [1.0, 0.0]],
+  "skills": [{"frame": 50, "name": "step"}]
+}
+```
+
+上面仅展示结构：实际 `commands` 必须有足够帧数以完成整段技能及返回行走，示例中的两帧会被拒绝。
+不要把未检查的攀爬整段标成行走片段。实际清单准备好后执行：
+
+```bash
+.venv/bin/python -m tron2_mjlab.motion_data compose --manifest <manifest.json> --output <composed.npz>
+```
+
+### 专家与学生入口
+
+**每次只运行一个训练进程。** 先停止或等待已有训练完成，再做下面的短训练检查：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 .venv/bin/train Mjlab-Tracking-TRON2-PHP-Expert \
+  --env.scene.num-envs 16 --agent.max-iterations 4 --agent.save-interval 1
+```
+
+专家默认使用上述 50Hz 真实参考文件，日志写入 `logs/rsl_rl/tron2_php_expert/`。
+更换参考时，应同时更新运动指令与配套地形文件；Python 工厂 `make_expert_env_cfg(motion_file=...)` 会同步配置两者。
+短训练只能检查优化与保存链路，不能作为学生训练所需的有效专家。
+
+获得经过回放确认的专家后，启动单专家深度蒸馏。小规模检查时必须同时降低 mini-batch 数量：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 .venv/bin/train Mjlab-Tracking-TRON2-PHP-Student \
+  --env.scene.num-envs 16 --agent.max-iterations 4 --agent.save-interval 1 \
+  --agent.algorithm.num-mini-batches 4 \
+  --agent.algorithm.teacher-checkpoints <validated-expert-checkpoint.pt>
+```
+
+学生日志写入 `logs/rsl_rl/tron2_php_student/`。默认课程长度 20,000 次迭代；缩短 `max_iterations` 不会自动缩短课程。
+专家与学生的观测布局都不同于旧平地任务，旧的 74 维检查点不能直接用于这些新任务。
+
+### 回归检查
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m compileall -q src/tron2_mjlab scripts tests
+```
+
+测试覆盖动作匹配、技能锁定、过渡连续性、地形同步变换、帧标签重采样、深度采样、观测隔离、蒸馏梯度和恢复。
+导出测试使用官方 TRON2 模型，需要事先准备模型资产；其中合成数据只用于算法检查，不能替代真实示范或训练结果。
+
 ## 静态障碍环境（第一阶段）
 
 本阶段为后续视觉越障研究提供环境基础，不改动原平地任务，不修改下载的官方 XML 或网格。
@@ -244,6 +349,8 @@ CUDA_VISIBLE_DEVICES=0 uv run play Mjlab-Velocity-Flat-TRON2-SFYG-External --che
 | --- | ---: | ---: |
 | `Mjlab-Velocity-Flat-TRON2-SFYG-External` | 10 | 74 |
 | `Mjlab-Velocity-Obstacles-TRON2-SFYG-External` | 10 | 74 |
+| `Mjlab-Tracking-TRON2-PHP-Expert` | 10 | 177 |
+| `Mjlab-Tracking-TRON2-PHP-Student` | 10 | 70 + 1×58×87 深度图 |
 
 ### 控制分工
 

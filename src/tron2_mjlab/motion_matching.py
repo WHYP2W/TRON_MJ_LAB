@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import numpy as np
 import torch
 from mjlab.utils.lab_api.math import quat_apply, quat_inv, yaw_quat
+from scipy.spatial.transform import Rotation
 
 FUTURE_TIMES = (0.33, 0.67, 1.0)
 
@@ -253,3 +255,170 @@ class MotionDatabase:
         if best is None:
             raise ValueError("No eligible motion frames in the requested search window")
         return best
+
+
+@dataclass(frozen=True)
+class SkillPlacement:
+    name: str
+    output_frame: int
+    source_frame: int
+    rotation: np.ndarray
+    translation: np.ndarray
+
+
+@dataclass(frozen=True)
+class ComposedMotion:
+    motion: MotionClip
+    commands: np.ndarray
+    source_names: tuple[str, ...]
+    source_frames: np.ndarray
+    placements: tuple[SkillPlacement, ...]
+
+
+def _rotation(quaternion: np.ndarray) -> Rotation:
+    return Rotation.from_quat(np.asarray(quaternion)[..., [1, 2, 3, 0]])
+
+
+def compose_motion(
+    database: MotionDatabase,
+    commands: np.ndarray,
+    skill_starts: Mapping[int, str],
+    foot_kinematics: Callable[[np.ndarray], np.ndarray],
+    *,
+    initial_clip: str,
+    search_interval: int = 10,
+    damping: float = 12.0,
+) -> ComposedMotion:
+    """Compose offline references through locomotion and locked atomic skills.
+
+    ``foot_kinematics`` evaluates two world-frame feet from xyz/wxyz/joint qpos.
+    Skill placements transform the source clip's paired terrain into the output.
+    Synthetic test clips are not suitable demonstrations for policy training.
+    """
+    commands = np.asarray(commands, dtype=np.float64)
+    if commands.ndim != 2 or commands.shape[1] != 2 or len(commands) < 2:
+        raise ValueError("Commands must have shape (frames >= 2, 2)")
+    if not np.isfinite(commands).all():
+        raise ValueError("Commands must be finite")
+    if not isinstance(search_interval, int) or search_interval < 1:
+        raise ValueError("Search interval must be a positive integer")
+    critical_spring(np.zeros(1), np.zeros(1), np.zeros(1), damping, 0.0)
+    if initial_clip not in database.clips:
+        raise ValueError(f"Unknown initial clip: {initial_clip}")
+    clip = database.clips[initial_clip]
+    if clip.skill_start is not None:
+        raise ValueError("Composition must start from a locomotion clip")
+    for frame, name in skill_starts.items():
+        if not isinstance(frame, int) or not 1 <= frame < len(commands):
+            raise ValueError("Skill start must be an output frame after frame zero")
+        if name not in database.clips or database.clips[name].skill_start is None:
+            raise ValueError(f"An annotated skill clip is required: {name}")
+
+    timestep = 1 / clip.fps
+    root_velocities = {
+        name: np.gradient(motion.root_pos, timestep, axis=0)
+        for name, motion in database.clips.items()
+    }
+    joint_velocities = {
+        name: np.gradient(motion.joint_pos, timestep, axis=0)
+        for name, motion in database.clips.items()
+    }
+    angular_velocities = {}
+    for name, motion in database.clips.items():
+        rotations = _rotation(motion.root_quat)
+        differences = (rotations[1:] * rotations[:-1].inv()).as_rotvec() / timestep
+        angular_velocities[name] = np.concatenate((differences, differences[-1:]))
+
+    source_frame = 0
+    in_skill = False
+    alignment = Rotation.identity()
+    translation = np.zeros(3)
+    offset_pos = np.zeros(3)
+    offset_pos_vel = np.zeros(3)
+    offset_rot = np.zeros(3)
+    offset_rot_vel = np.zeros(3)
+    offset_joints = np.zeros(clip.joint_pos.shape[1])
+    offset_joint_vel = np.zeros_like(offset_joints)
+    transition_time = 0.0
+    root_velocity = root_velocities[clip.name][0]
+    joint_velocity = joint_velocities[clip.name][0]
+    angular_velocity = angular_velocities[clip.name][0]
+    foot_velocity = np.gradient(clip.foot_pos, timestep, axis=0)[0]
+    positions, quaternions, joints, feet = [], [], [], []
+    source_names, source_frames, placements = [], [], []
+
+    for output_frame in range(len(commands)):
+        requested_skill = skill_starts.get(output_frame)
+        if output_frame:
+            if requested_skill is not None and in_skill:
+                raise ValueError("A skill cue overlaps an active skill; insert locomotion first")
+            finished = in_skill and source_frame >= clip.skill_end
+            rematch = requested_skill is not None or finished or (
+                not in_skill and (
+                    output_frame % search_interval == 0
+                    or source_frame + 1 >= clip.frames - int(np.ceil(clip.fps))
+                )
+            )
+            if rematch:
+                query = query_features(
+                    quaternions[-1], root_velocity, feet[-1] - positions[-1],
+                    foot_velocity, commands[output_frame],
+                    heading_velocity=float(angular_velocity[2]),
+                )
+                match = database.search(query, skill=requested_skill)
+                clip, source_frame = match.clip, match.frame
+                in_skill = requested_skill is not None
+                predicted_rotation = Rotation.from_rotvec(angular_velocity * timestep) * _rotation(quaternions[-1])
+                heading_current = yaw_quat(torch.tensor(predicted_rotation.as_quat()[[3, 0, 1, 2]])).numpy()
+                heading_source = yaw_quat(torch.tensor(clip.root_quat[source_frame])).numpy()
+                alignment = _rotation(heading_current) * _rotation(heading_source).inv()
+                translation = positions[-1] + root_velocity * timestep - alignment.apply(clip.root_pos[source_frame].copy())
+                candidate_rotation = alignment * _rotation(clip.root_quat[source_frame])
+                offset_pos = np.zeros(3)
+                offset_pos_vel = root_velocity - alignment.apply(root_velocities[clip.name][source_frame])
+                offset_rot = (predicted_rotation * candidate_rotation.inv()).as_rotvec()
+                offset_rot_vel = angular_velocity - alignment.apply(angular_velocities[clip.name][source_frame])
+                offset_joints = joints[-1] + joint_velocity * timestep - clip.joint_pos[source_frame]
+                offset_joint_vel = joint_velocity - joint_velocities[clip.name][source_frame]
+                transition_time = 0.0
+                if in_skill:
+                    placements.append(SkillPlacement(
+                        clip.name, output_frame, source_frame,
+                        alignment.as_quat()[[3, 0, 1, 2]], translation.copy(),
+                    ))
+            else:
+                source_frame += 1
+                transition_time += timestep
+
+        position = alignment.apply(clip.root_pos[source_frame].copy()) + translation
+        position += critical_spring(offset_pos, offset_pos_vel, np.zeros(3), damping, transition_time)[0]
+        rotation_offset = critical_spring(offset_rot, offset_rot_vel, np.zeros(3), damping, transition_time)[0]
+        orientation = Rotation.from_rotvec(rotation_offset) * alignment * _rotation(clip.root_quat[source_frame])
+        quaternion = orientation.as_quat()[[3, 0, 1, 2]]
+        joint_position = clip.joint_pos[source_frame] + critical_spring(
+            offset_joints, offset_joint_vel, np.zeros_like(offset_joints), damping, transition_time,
+        )[0]
+        foot_position = np.asarray(foot_kinematics(np.concatenate((position, quaternion, joint_position))), dtype=np.float64)
+        if foot_position.shape != (2, 3) or not np.isfinite(foot_position).all():
+            raise ValueError("Foot kinematics must return two finite world positions")
+        if positions:
+            root_velocity = (position - positions[-1]) / timestep
+            joint_velocity = (joint_position - joints[-1]) / timestep
+            angular_velocity = (orientation * _rotation(quaternions[-1]).inv()).as_rotvec() / timestep
+            foot_velocity = (foot_position - feet[-1]) / timestep
+        positions.append(position)
+        quaternions.append(quaternion)
+        joints.append(joint_position)
+        feet.append(foot_position)
+        source_names.append(clip.name)
+        source_frames.append(source_frame)
+
+    if in_skill and source_frame < clip.skill_end:
+        raise ValueError("Command sequence ends before the active skill completes")
+    motion = MotionClip(
+        "composed", clip.fps, np.asarray(positions), np.asarray(quaternions),
+        np.asarray(joints), np.asarray(feet),
+    )
+    return ComposedMotion(
+        motion, commands.copy(), tuple(source_names), np.asarray(source_frames), tuple(placements),
+    )

@@ -9,10 +9,11 @@
 
 ## Behavioral Boundaries
 
-- Keep task discovery consistent across the `mjlab.tasks` entry point in [pyproject.toml](pyproject.toml), package import in [src/tron2_mjlab/__init__.py](src/tron2_mjlab/__init__.py), and idempotent registration in [src/tron2_mjlab/tasks.py](src/tron2_mjlab/tasks.py). Preserve the sole task ID `Mjlab-Velocity-Flat-TRON2-SFYG-External` unless the requested change requires otherwise; do not modify upstream mjlab tasks.
+- Keep task discovery consistent across the `mjlab.tasks` entry point in [pyproject.toml](pyproject.toml), package import in [src/tron2_mjlab/__init__.py](src/tron2_mjlab/__init__.py), and idempotent registration in [src/tron2_mjlab/tasks.py](src/tron2_mjlab/tasks.py). Preserve the flat baseline `Mjlab-Velocity-Flat-TRON2-SFYG-External`; obstacle, PHP expert, and PHP student tasks must remain separate. Do not modify upstream mjlab tasks.
 - Make environment, observation, and reward changes in [src/tron2_mjlab/env_cfg.py](src/tron2_mjlab/env_cfg.py). The policy controls only the 10 leg joints; the `upper_body` action term contributes zero policy action dimensions. Flag observation/action layout changes as checkpoint compatibility changes.
 - Keep upper-body target processing in [src/tron2_mjlab/control.py](src/tron2_mjlab/control.py). Preserve joint ordering, soft-limit and rate-limit enforcement, and manual target persistence until replacement, release, or environment reset. Leg policy steps must not overwrite external upper-body targets.
 - Keep joint definitions, actuator configuration, and in-memory model adaptation in [src/tron2_mjlab/robot.py](src/tron2_mjlab/robot.py). Adapt the loaded model there instead of editing the downloaded official XML or meshes.
+- Keep reference conversion and provenance in [src/tron2_mjlab/motion_data.py](src/tron2_mjlab/motion_data.py), offline composition in [src/tron2_mjlab/motion_matching.py](src/tron2_mjlab/motion_matching.py), and the joint DAgger/PPO objective in [src/tron2_mjlab/distillation.py](src/tron2_mjlab/distillation.py). Synthetic fixtures validate algorithms only; never present them as demonstrations or trained policy results.
 
 ## Assets and Generated Data
 
@@ -22,7 +23,7 @@
 
 ## Validation
 
-- No test suite, lint configuration, or CI workflow is currently provided. Do not assume pytest or Ruff is a configured project check.
+- Run `.venv/bin/python -m unittest discover -s tests -v` for the motion, composition, export, and distillation regressions. Export tests need the official model assets. No lint configuration or CI workflow is provided; do not assume pytest or Ruff is a configured project check.
 - For Python edits, a dependency-free syntax check is `python -m compileall -q src/tron2_mjlab` using an available interpreter in the supported range. This does not validate imports, task registration, or simulation behavior.
 - For runtime checks, use the zero-action playback command in [README.md](README.md) after confirming the supported environment, installed dependencies, model assets, and GPU/viewer availability. Package import registers tasks; a successful import is not proof that model loading or simulation works.
 - Do not launch dependency/asset downloads or long training runs as routine validation. When training is requested, follow the documented environment-count guidance and run only one training process at a time.

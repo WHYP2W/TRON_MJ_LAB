@@ -5,7 +5,7 @@ from pathlib import Path
 
 from mjlab.actuator import BuiltinPositionActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
-from mujoco._enums import mjtJoint
+from mujoco._enums import mjtGeom, mjtJoint
 from mujoco._specs import MjSpec
 
 LEG_JOINTS = tuple(
@@ -78,6 +78,35 @@ def get_spec() -> MjSpec:
             name=f"foot_{side}", size=(0.01, 0.0, 0.0)
         )
     spec.body("gripper_pick").add_site(name="tool_tip", size=(0.01, 0.0, 0.0))
+    return spec
+
+
+def get_retarget_spec() -> MjSpec:
+    """Create OmniRetarget contact frames without changing the official assets."""
+    spec = get_spec()
+    spec.compiler.meshdir = str((model_path().parent / "../meshes").resolve())
+    for joint in spec.joints:
+        if joint.type == mjtJoint.mjJNT_FREE:
+            joint.name = ""
+    spec.worldbody.add_geom(
+        name="ground",
+        type=mjtGeom.mjGEOM_PLANE,
+        size=(0.0, 0.0, 0.01),
+        friction=(0.8, 0.005, 0.0001),
+    )
+    for side, label, lateral in (("L", "left", 0.0355), ("R", "right", -0.0355)):
+        body = spec.body(f"ankle_pitch_{side}_Link")
+        body.add_body(name=f"{label}_toe", pos=(-0.1005, lateral, -0.07124))
+        body.add_body(name=f"{label}_heel", pos=(0.0750, lateral, -0.07124))
+    return spec
+
+
+def get_perceptive_spec() -> MjSpec:
+    """Keep robot collision geometry separate from terrain-only scan rays."""
+    spec = get_spec()
+    for geom in spec.geoms:
+        if geom.contype != 0 or geom.conaffinity != 0:
+            geom.group = 3
     return spec
 
 

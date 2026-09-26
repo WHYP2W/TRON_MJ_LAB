@@ -7,6 +7,7 @@ import numpy as np
 from tron2_mjlab.motion_matching import (
     MotionClip,
     MotionDatabase,
+    compose_motion,
     critical_spring,
     integrated_spring,
     matching_features,
@@ -92,6 +93,39 @@ class MotionMatchingTests(unittest.TestCase):
             MotionDatabase([make_clip()]).search(np.zeros(26))
         with self.assertRaises(ValueError):
             critical_spring(np.zeros(1), np.zeros(1), np.zeros(1), 0.0, 1.0)
+
+    def test_composition_locks_skill_and_returns_to_locomotion(self):
+        source = make_clip("skill", skill_start=40, skill_end=90, entry_frames=20)
+        skill = MotionClip(
+            source.name, source.fps, source.root_pos, source.root_quat,
+            np.full_like(source.joint_pos, 0.3), source.foot_pos,
+            skill_start=40, skill_end=90, entry_frames=20,
+        )
+        offsets = np.array([[0.0, 0.15, -0.85], [0.0, -0.15, -0.85]])
+        result = compose_motion(
+            MotionDatabase([make_clip(), skill]), np.tile([1.0, 0.0], (180, 1)),
+            {20: "skill"}, lambda qpos: qpos[:3] + offsets, initial_clip="locomotion",
+        )
+        selected = np.flatnonzero(np.array(result.source_names) == "skill")
+        self.assertEqual(selected[0], 20)
+        np.testing.assert_array_equal(np.diff(result.source_frames[selected]), 1)
+        self.assertEqual(result.source_frames[selected[-1]], 90)
+        self.assertEqual(result.source_names[selected[-1] + 1], "locomotion")
+        self.assertLess(np.max(np.linalg.norm(np.diff(result.motion.root_pos, axis=0), axis=-1)), 0.05)
+        self.assertLess(np.max(np.abs(result.motion.joint_pos[20] - result.motion.joint_pos[19])), 0.01)
+        self.assertEqual(len(result.placements), 1)
+        np.testing.assert_allclose(np.linalg.norm(result.motion.root_quat, axis=-1), 1.0)
+
+    def test_composition_rejects_overlap_and_truncated_skills(self):
+        database = MotionDatabase([make_clip(), make_clip("skill", skill_start=40, skill_end=90, entry_frames=20)])
+        offsets = np.array([[0.0, 0.15, -0.85], [0.0, -0.15, -0.85]])
+        for frames, cues in ((180, {20: "skill", 21: "skill"}), (30, {20: "skill"})):
+            with self.subTest(frames=frames):
+                with self.assertRaises(ValueError):
+                    compose_motion(
+                        database, np.tile([1.0, 0.0], (frames, 1)), cues,
+                        lambda qpos: qpos[:3] + offsets, initial_clip="locomotion",
+                    )
 
 
 if __name__ == "__main__":
