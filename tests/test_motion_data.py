@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from tron2_mjlab.motion_data import compose_tracking_motion, export_tracking_motion
-from tron2_mjlab.robot import LEG_JOINTS, UPPER_JOINTS, robot_cfg
+from tron2_mjlab.robot import LEG_JOINTS, UPPER_JOINTS, retarget_collision_pairs, robot_cfg
 
 
 def write_fixture(path: Path, translation: float = 0.0) -> None:
@@ -31,6 +31,12 @@ def write_fixture(path: Path, translation: float = 0.0) -> None:
 
 
 class MotionDataTests(unittest.TestCase):
+    def test_collision_pairs_cover_fixed_attachments(self):
+        pairs = retarget_collision_pairs()
+        self.assertEqual(len(pairs), len(set(pairs)))
+        self.assertTrue(any(set(pair) == {"proximal_yaw_L_Link", "antenna_L_Link"} for pair in pairs))
+        self.assertTrue(any(set(pair) == {"knee_L_Link", "arm2_Link"} for pair in pairs))
+
     def test_time_scaling_preserves_poses_and_scales_velocities(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

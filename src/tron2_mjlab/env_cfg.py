@@ -432,7 +432,7 @@ def make_expert_env_cfg(*, play: bool = False, motion_file: str | None = None) -
     cfg.scene.entities = {"robot": robot_cfg()}
     cfg.scene.entities["robot"].spec_fn = get_perceptive_spec
     cfg.scene.num_envs = 1 if play else 64
-    motion_file = motion_file or str(PROJECT_ROOT / "downloads/retargeted/tron2_climb16_fps50.npz")
+    motion_file = motion_file or str(PROJECT_ROOT / "downloads/retargeted/tron2_climb16_validated_fps50.npz")
     cfg.scene.terrain = TerrainEntityCfg(
         terrain_type="generator", terrain_generator=TerrainGeneratorCfg(
             seed=0, size=(12.0, 12.0), sub_terrains={

@@ -40,6 +40,7 @@ def retarget(args: argparse.Namespace) -> dict:
     from scipy.spatial.transform import Rotation
 
     from holosoma_retargeting.config_types.data_type import MOCAP_DEMO_JOINTS
+    from holosoma_retargeting.config_types.retargeter import SelfCollisionConfig
     from holosoma_retargeting.src.interaction_mesh_retargeter import InteractionMeshRetargeter
     from holosoma_retargeting.src.utils import (
         calculate_laplacian_coordinates,
@@ -48,8 +49,43 @@ def retarget(args: argparse.Namespace) -> dict:
         get_adjacency_list,
     )
     from tron2_mjlab.robot import (
-        LEG_JOINTS, UPPER_HOME, UPPER_JOINTS, get_retarget_spec, robot_cfg,
+        LEG_JOINTS, UPPER_HOME, UPPER_JOINTS, get_retarget_spec, retarget_collision_pairs, robot_cfg,
     )
+
+    class CollisionAwareRetargeter(InteractionMeshRetargeter):
+        def _contact_constraints(self, self_contacts):
+            self._prefilter_pairs_with_mj_collision(self.collision_detection_threshold)
+            contacts = [
+                (tuple(int(index) for index in contact.geom), float(contact.dist),
+                 np.asarray(contact.frame).reshape(3, 3)[0].copy(), contact.pos.copy())
+                for contact in self.robot_data.contact
+            ]
+            selected = {tuple(sorted(pair)) for pair in self._self_collision_geom_pairs}
+            jacobians, distances = {}, {}
+            for index, (pair, distance, normal, position) in enumerate(contacts):
+                if self_contacts:
+                    if tuple(sorted(pair)) not in selected:
+                        continue
+                else:
+                    names = [self.robot_model.geom(geom).name for geom in pair]
+                    if sum(name.startswith("ground") for name in names) != 1:
+                        continue
+                first_body, second_body = [int(self.robot_model.geom_bodyid[geom]) for geom in pair]
+                first = self._calc_contact_jacobian_from_point(first_body, position.copy(), input_world=True)
+                second = self._calc_contact_jacobian_from_point(second_body, position.copy(), input_world=True)
+                key = ("self" if self_contacts else "world", *pair, index)
+                jacobians[key] = -normal @ (first - second)
+                distances[key] = distance
+            return jacobians, distances
+
+        def _update_jacobians_and_phis_from_q(self, q):
+            self.robot_data.qpos[:] = q
+            mujoco.mj_forward(self.robot_model, self.robot_data)
+            return self._contact_constraints(False)
+
+        def _compute_self_collision_constraints(self, frame_idx):
+            del frame_idx
+            return self._contact_constraints(True)
 
     if args.output.exists():
         raise FileExistsError(f"Output already exists; it was not changed: {args.output}")
@@ -148,9 +184,12 @@ def retarget(args: argparse.Namespace) -> dict:
             MANUAL_LB=lower, MANUAL_UB=upper, MANUAL_COST={},
             NOMINAL_TRACKING_INDICES=np.arange(3, 7),
         )
-        solver = InteractionMeshRetargeter(
+        solver = CollisionAwareRetargeter(
             task_constants=constants, object_urdf_path=None,
             foot_sticking_tolerance=0.01, visualize=False, debug=False,
+            self_collision=SelfCollisionConfig(
+                enable=True, pairs=retarget_collision_pairs(), tolerance=0.005,
+            ),
         )
         current = solver.robot_model.qpos0.copy()
         current[:3] = root_position
@@ -170,7 +209,7 @@ def retarget(args: argparse.Namespace) -> dict:
                 target_laplacian=laplacian, adj_list=adjacency, obj_pts_local=ground,
                 foot_sticking=sticking[frame], w_nominal_tracking=0.5,
                 q_a_nominal=previous, init_t=frame == 0,
-                n_iter=30 if frame == 0 else 5, frame_idx=frame,
+                n_iter=30 if frame == 0 else 10, frame_idx=frame,
             )
             if not np.isfinite(current).all():
                 raise ValueError(f"Non-finite retargeted pose at frame {frame}")
@@ -178,6 +217,13 @@ def retarget(args: argparse.Namespace) -> dict:
             limits = solver.robot_model.jnt_range[1:]
             if np.any(current[7:] < limits[:, 0] - 1e-5) or np.any(current[7:] > limits[:, 1] + 1e-5):
                 raise ValueError(f"Joint limit violation at frame {frame}")
+            solver.robot_data.qpos[:] = current
+            mujoco.mj_forward(solver.robot_model, solver.robot_data)
+            for contact in solver.robot_data.contact:
+                bodies = [int(solver.robot_model.geom_bodyid[int(index)]) for index in contact.geom]
+                if all(body != 0 for body in bodies) and contact.dist < -0.003:
+                    names = [solver.robot_model.body(body).name for body in bodies]
+                    raise ValueError(f"Self penetration at frame {frame}: {names}, distance={contact.dist}")
             motions.append(current.copy())
             costs.append(float(cost))
             if frame % 10 == 0 or frame == len(human) - 1:
@@ -194,6 +240,8 @@ def retarget(args: argparse.Namespace) -> dict:
         terrain_half_sizes=np.array([box[1] for box in boxes]),
         terrain_quaternions=np.array([box[2] for box in boxes]),
         terrain_urdf_sha256=hashlib.sha256(terrain_path.read_bytes()).hexdigest(),
+        self_collision_pairs=np.asarray(retarget_collision_pairs()),
+        self_collision_margin=0.005,
         validation_scope="kinematic_retargeting_not_policy_quality",
     )
     return {"output": str(args.output), "frames": len(result), "fps": fps, "max_cost": max(costs), "upper_body_held": True, "terrain": "paired_boxes"}

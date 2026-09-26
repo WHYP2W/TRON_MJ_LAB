@@ -29,7 +29,7 @@ PHP 研究流程另外复用固定版本的官方 OmniRetarget 实现，工具�
 ## 环境要求
 
 项目以 **Ubuntu 22.04 LTS、x86_64、NVIDIA GPU** 为主要运行环境。
-下表中的软件版本由锁文件固定；GPU 和驱动需要在实际机器上验证，不保证所有硬件组合均可运行。
+下表中的软件版本由锁文件固55定；GPU 和驱动需要在实际机器上验证，不保证所有硬件组合均可运行。
 
 | 项目 | 配置要求 |
 | --- | --- |
@@ -143,14 +143,42 @@ MUJOCO_GL=glfw CUDA_VISIBLE_DEVICES=0 uv run play Mjlab-Velocity-Flat-TRON2-SFYG
 
 ### 当前状态与限制
 
-- 已取得并校验 OmniRetarget 的真实地形交互动作，使用官方 SQP/Clarabel 实现完成一个 TRON2 动作的重定向，保留配套障碍及来源哈希。
+- 已取得并校验 OmniRetarget 的真实地形交互动作，并完成一个初版 TRON2 重定向。后续检查发现初版参考含腿部与机械臂/附件的自碰撞，不能作为合格训练参考。新增完整自碰撞约束后，小样本可通过，但完整 `climb_16` 在越障段尚未找到可行解。
 - 已实现 27 维匹配特征、未来速度指令查询、技能进入窗口、执行期间锁定、返回行走和惯性化过渡。拼接支持同步变换配套障碍，并导出 mjlab 跟踪格式。
 - 专家采用 BeyondMimic 跟踪框架、全局参考误差、0.7m 高度扫描与失败片段采样。深度学生采用三层 CNN、32 维视觉特征及五层 MLP，学生输入中没有参考姿态、全局位置或高度扫描。
 - 联合优化器实现 DAgger/PPO 权重课程、专家有效域掩码、终止阈值放宽、延迟开启 KL 学习率调节、教师冻结及课程检查点恢复。
 - 当前环境仍是单个真实参考动作的试验入口；完整行走动作库、多个专家覆盖全部目标技能、充分的接近距离采样、地形随机化和持续自主技能衔接尚未验证。
 - 当前学生试验入口使用固定前向速度指令；最终应使用与合成轨迹配套的速度指令分布。多教师优化器入口要求明确的 `teacher_id`，默认单参考环境不提供多技能分配。
 - 深度图为 58×87，按 30Hz 保持采样，额外加入 3–4 个控制步的观测延迟。训练时加入深度偏移与高斯噪声。相机使用仿真名义安装点，尚无实机外参标定或安装扰动验证。
-- 已通过 CPU 回归、真实轨迹转换、GPU 专家/深度观测及 CNN 前向检查；联合优化器仅通过合成批次更新检查，**不能据此声称已获得有效专家、深度策略或 50cm 越障能力**。
+- 已通过 CPU 回归、真实轨迹转换、GPU 专家/深度观测及 CNN 前向检查。专家优化、检查点和 ONNX 导出链路已实测通过，但后续真实训练仍未完成完整动作。联合优化器只通过合成批次更新检查，**没有有效专家、成熟深度策略或已验证的 50cm 越障能力**。
+
+### 训练实验记录
+
+2026-09-26 的下列实验均使用初版参考，记录保留用于分析，不作为论文成功结果。
+独立评估使用 8 个环境、固定种子、起点附近 1cm/0.01rad 扰动，只统计首次尝试，不计自动重置后的重试。
+
+| 实验 | 参考速度 | 最后迭代编号 | 完整动作完成 | 首次失败步数 |
+| --- | ---: | ---: | ---: | ---: |
+| 64 环境初步训练 | 1.0 | 199 | 0/8 | 48–50 |
+| 512 环境续训 | 1.0 | 1198 | 0/8 | 47–49 |
+| 2048 环境续训 | 1.0 | 3197 | 0/8 | 26–27 |
+| 增加 20% 起点采样 | 1.0 | 4196 | 0/8 | 172–175 |
+| 半速参考适配 | 0.5 | 5695 | 0/8 | 348–349（总计 567 帧） |
+
+随机起点评估曾有 9/24 次完成，但多从后半段开始，不能当作整段成功率。
+初版参考在越障段存在最高数厘米的自穿透。现在重定向使用全部碰撞刚体配对、MuJoCo 接触距离和法线，
+并逐帧拒绝明显自穿透输出；旧参考与检查点已停止用于新训练。默认专家/学生入口改为尚待生成的
+`tron2_climb16_validated_fps50.npz`，因此在合格参考就绪前默认训练会明确报缺少文件，而不是静默复用旧参考。
+
+评估脚本为 [scripts/evaluate_php.py](scripts/evaluate_php.py)。它记录检查点和参考文件哈希、播放速度、起始帧及失败原因：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=egl .venv/bin/python scripts/evaluate_php.py \
+  --checkpoint <checkpoint.pt> --motion-file <reference.npz> --output <report.json>
+```
+
+`--sampling uniform` 只用于片段覆盖诊断。时间缩放可由转换命令的 `--playback-speed` 显式指定，默认 1.0；
+`--env.commands.motion.start-sampling-probability` 默认 0，仅用于明确标记的 TRON2 适配实验。
 
 ### 数据与重定向
 
@@ -167,11 +195,14 @@ bash scripts/setup_retargeting.sh
 ```bash
 downloads/retarget-env/bin/python scripts/retarget_motion.py \
   --member robot-terrain/climb_16_z_scale_0.8.npz \
-  --output downloads/retargeted/tron2_climb16_paired.npz
+  --output downloads/retargeted/tron2_climb16_validated.npz &&
 .venv/bin/python -m tron2_mjlab.motion_data convert \
-  --source downloads/retargeted/tron2_climb16_paired.npz \
-  --output downloads/retargeted/tron2_climb16_fps50.npz
+  --source downloads/retargeted/tron2_climb16_validated.npz \
+  --output downloads/retargeted/tron2_climb16_validated_fps50.npz
 ```
+
+当前 `climb_16` 的严格完整重定向尚未通过，上述命令展示处理入口，不保证该动作在现有约束下可行。
+只有重定向完整通过后才会执行转换。需要先修正参考约束或选择更合适的动作，不能关闭碰撞检查以获得输出。
 
 已有输出不会被覆盖。用于快速检查时可给重定向脚本增加 `--max-frames 8` 并使用另一个输出路径，
 但截短样本不能作为完整技能训练参考。数据卡声明 MIT 许可；LAFAN1 有独立限制，作者未在该数据集中发布其重定向结果。

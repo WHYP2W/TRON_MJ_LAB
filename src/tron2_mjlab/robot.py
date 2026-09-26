@@ -110,6 +110,21 @@ def get_perceptive_spec() -> MjSpec:
     return spec
 
 
+def retarget_collision_pairs() -> list[tuple[str, str]]:
+    """Cover robot collision bodies; MuJoCo handles adjacent-body filtering."""
+    model = get_retarget_spec().compile()
+    bodies = sorted({
+        int(model.geom_bodyid[index]) for index in range(model.ngeom)
+        if model.geom_bodyid[index] != 0
+        and (model.geom_contype[index] != 0 or model.geom_conaffinity[index] != 0)
+    })
+    return [
+        (model.body(first).name, model.body(second).name)
+        for index, first in enumerate(bodies) for second in bodies[index + 1:]
+        if model.body_weldid[first] != model.body_weldid[second]
+    ]
+
+
 def robot_cfg() -> EntityCfg:
     initial_positions = dict.fromkeys(LEG_JOINTS, 0.0)
     initial_positions.update(dict(zip(UPPER_JOINTS, UPPER_HOME, strict=True)))

@@ -46,6 +46,7 @@ class DistillationTests(unittest.TestCase):
             self.assertEqual(tuple(cfg.actions), ("joint_pos", "upper_body"))
             self.assertEqual(cfg.actions["joint_pos"].actuator_names, LEG_JOINTS)
             self.assertEqual(cfg.actions["joint_pos"].scale, 1.0)
+            self.assertTrue(cfg.commands["motion"].motion_file.endswith("_validated_fps50.npz"))
 
     def test_curriculum_keeps_dagger_and_relaxes_termination(self):
         first = distillation_schedule(0, 20000)
