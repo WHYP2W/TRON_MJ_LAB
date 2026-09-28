@@ -10,8 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "mjlab==1.6.0",
+    "pygame==2.6.1",
     "torch==2.10.0",
 ]
+
+[project.scripts]
+tron2-play-gamepad = "tron2_mjlab.play_gamepad:main"
 
 [project.entry-points."mjlab.tasks"]
 tron2_yg = "tron2_mjlab"
